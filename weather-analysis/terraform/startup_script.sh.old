@@ -2,7 +2,7 @@
 
 # Update and install dependencies
 apt-get update
-apt-get install -y docker.io docker-compose git
+apt-get install -y python3-pip python3-dev libpq-dev postgresql postgresql-contrib docker.io docker-compose git
 
 # Enable and start Docker
 systemctl enable docker
@@ -11,19 +11,28 @@ systemctl start docker
 # Add current user to Docker group
 usermod -aG docker $(whoami)
 
+# Install Python dependencies
+pip3 install apache-airflow[gcp,postgres]==2.7.1 pytest
+
 # Create airflow directory
 mkdir -p /opt/airflow
 cd /opt/airflow
 
-# Create directories for Airflow with proper permissions
-mkdir -p /opt/airflow/dags
-mkdir -p /opt/airflow/logs
-mkdir -p /opt/airflow/plugins
+# Initialize Airflow config
+export AIRFLOW_HOME=/opt/airflow
+airflow config init
 
-# Set proper permissions
-chmod -R 777 /opt/airflow/logs
-chmod -R 777 /opt/airflow/dags
-chmod -R 777 /opt/airflow/plugins
+# Set up Airflow database
+airflow db init
+
+# Create Airflow user
+airflow users create \
+    --username admin \
+    --password admin \
+    --firstname Admin \
+    --lastname User \
+    --role Admin \
+    --email admin@example.com
 
 # Create Docker Compose file for Airflow
 cat > docker-compose.yml <<EOL
@@ -47,15 +56,13 @@ services:
     image: apache/airflow:2.7.1
     depends_on:
       - postgres
-      - airflow-init
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW__CORE__FERNET_KEY=''
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
-      - AIRFLOW__WEBSERVER__WEB_SERVER_HOST=0.0.0.0
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -74,14 +81,12 @@ services:
     image: apache/airflow:2.7.1
     depends_on:
       - postgres
-      - airflow-init
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
       - AIRFLOW__CORE__FERNET_KEY=''
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -89,30 +94,20 @@ services:
     command: scheduler
     restart: always
 
-  airflow-init:
-    image: apache/airflow:2.7.1
-    depends_on:
-      - postgres
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__FERNET_KEY=''
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./logs:/opt/airflow/logs
-      - ./plugins:/opt/airflow/plugins
-    entrypoint: /bin/bash
-    command: -c "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
-
 volumes:
   postgres-db-volume:
 EOL
+
+# Create directories for Airflow
+mkdir -p /opt/airflow/dags
+mkdir -p /opt/airflow/logs
+mkdir -p /opt/airflow/plugins
 
 # Start Airflow using Docker Compose
 cd /opt/airflow
 docker-compose up -d
 
+# Setup firewall to allow Airflow web UI access
+gcloud compute firewall-rules create allow-airflow --allow tcp:8080
+
 echo "Airflow setup complete. You can access the Airflow UI at http://[EXTERNAL_IP]:8080"
-echo "To verify containers are running: docker ps"
